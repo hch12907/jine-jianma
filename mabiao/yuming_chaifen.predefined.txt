@@ -37,6 +37,7 @@
 对于	cj
 欢迎	cl
 种类	ch
+满	ck
 观点	cv
 难道	cw
 鸡蛋	cx

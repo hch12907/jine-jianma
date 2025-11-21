@@ -324,7 +324,7 @@ fn make_space_jianma_candidate(
             continue
         }
 
-        for i in 1..(character.bianma.len() - 1).min(3) {
+        for i in 1..(character.bianma.len() - 1).min(4) {
             let jianma = CompactString::from(&character.bianma.as_str()[..i]);
 
             if unavailable_bianma.contains(&jianma) {
@@ -336,9 +336,10 @@ fn make_space_jianma_candidate(
                 // * jianma_diff
                 * f64::powf(1.8, jianma_diff - 1.0)
                 * (1.0 + 0.30 * (character.zigen_count.min(3) as f64 - 1.0))
+                * f64::powf(10.0, -(jianma.len().saturating_sub(2) as f64))
                 + 0.0;
 
-            if jianma_weight > 8000.0 {
+            if jianma_weight > 60000.0 {
                 result.push((*zi, Character {
                     bianma: CompactString::from(jianma),
                     weight: jianma_weight as u64,
