@@ -12,12 +12,12 @@ use compact_str::CompactString;
 #[derive(FromArgs)]
 /// 简码计算
 struct Args {
-    #[argh(option, default=r#"String::from("beiyu:0.5,zhihu:0.5")"#)]
-    /// 字频表，可以混合使用多个字频表。默认为 beiyu:0.5,zhihu:0.5。
+    #[argh(option, default=r#"String::from("beiyu:0.5,zhihu:0.5,tw:0.01")"#)]
+    /// 字频表，可以混合使用多个字频表。默认为 beiyu:0.5,zhihu:0.5,tw:0.01。
     frequency: String,
 
     #[argh(option, default=r#"PathBuf::from("mabiao/yuming_chaifen.count.txt")"#)]
-    /// 字根数量表，一个字有多少个字根。
+    /// 字根数量表，记录了一个字有多少个字根。
     count: PathBuf,
 
     #[argh(option, default=r#"PathBuf::from("mabiao/yuming_chaifen.allow.txt")"#)]
@@ -31,19 +31,19 @@ struct Args {
     predefined: PathBuf,
 
     #[argh(option, default=r#"PathBuf::from("output/yuming.txt")"#)]
-    /// 简码表路径。
+    /// 简码表输出路径。
     out: PathBuf,
 
     #[argh(switch)]
-    /// 打印候选简码
+    /// 打印候选简码。
     print_candidates: bool,
 
     #[argh(switch)]
-    /// 允许空格简码
+    /// 允许空格简码。
     space_jianma: bool,
 
     #[argh(option, default=r#"String::from("aeiou")"#)]
-    /// B区码
+    /// B区键位，默认为 aeiou。代码永远会假设空格是B区键位之一，因此不需要加入空格。
     b_area: String,
 
     #[argh(positional, default=r#"PathBuf::from("mabiao/yuming_chaifen.dict.yaml")"#)]
@@ -414,6 +414,7 @@ fn write_selected_jianma<W: Write>(
     jianmas: &Vec<(char, CompactString)>,
     predefineds: &Vec<Predefined>,
     b_area: &[char],
+    space_jianma: bool,
 ) {
     let mut writer = BufWriter::new(writer);
 
@@ -438,7 +439,9 @@ fn write_selected_jianma<W: Write>(
     });
 
     for (zi, bianma) in selected_jianma.iter() {
-        let bianma = bianma.trim_ascii();
+        if !space_jianma && !bianma.ends_with(b_area) {
+            continue
+        }
         write!(writer, "{zi}\t{bianma}\n").unwrap();
     }
 }
@@ -484,7 +487,12 @@ fn main() {
         &selected_jianma,
         &predefineds,
         &b_area,
+        args.space_jianma,
     );
 
-    println!("最终简码得分：\n韵码简\t\t{} 分\n韵码加空格简\t{} 分", score, score + score_space);   
+    println!("最终简码得分：");
+    println!("韵码简\t\t{} 分", score);
+    if args.space_jianma {
+        println!("韵码加空格简\t{} 分", score + score_space);
+    }
 }
