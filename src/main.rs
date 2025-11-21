@@ -46,6 +46,10 @@ struct Args {
     /// B区键位，默认为 aeiou。代码永远会假设空格是B区键位之一，因此不需要加入空格。
     b_area: String,
 
+    #[argh(switch)]
+    /// 按频率排序生成出来的简码表。
+    sort_freq: bool,
+
     #[argh(positional, default=r#"PathBuf::from("mabiao/yuming_chaifen.dict.yaml")"#)]
     /// 宇浩拆分文件
     mabiao: PathBuf,
@@ -289,14 +293,14 @@ fn make_jianma_candidate(
 
 fn make_space_jianma_candidate(
     mabiao: &HashMap<char, Character>,
-    suffix_jianma: &Vec<(char, CompactString)>,
+    suffix_jianma: &Vec<(char, Character)>,
     predefineds: &Vec<Predefined>,
     b_area: &[char],
 ) -> Vec<(char, Character)> {
     let mut result = Vec::new();
     let unneeded_zi = suffix_jianma
         .iter()
-        .filter(|(_zi, ch)| ch.len() <= 3)
+        .filter(|(_zi, ch)| ch.bianma.len() <= 3)
         .map(|(zi, _ch)| *zi)
         .chain(predefineds
             .iter()
@@ -363,7 +367,7 @@ fn write_jianma_candidate<W: Write>(writer: W, candidates: &Vec<(char, Character
     }
 }
 
-fn make_jianma_table_lsap(jianma: &Vec<(char, Character)>) -> (u64, Vec<(char, CompactString)>) {
+fn make_jianma_table_lsap(jianma: &Vec<(char, Character)>) -> (u64, Vec<(char, Character)>) {
     let zis = jianma
         .iter()
         .map(|(zi, _)| *zi)
@@ -401,7 +405,11 @@ fn make_jianma_table_lsap(jianma: &Vec<(char, Character)>) -> (u64, Vec<(char, C
         let score = cost_matrix[i * zis.len() + j];
 
         if score > 0.0 {
-            selected_jianma.push((zis[j], bianmas[i].clone()));
+            selected_jianma.push((zis[j], Character {
+                bianma: bianmas[i].clone(),
+                weight: score as u64,
+                zigen_count: 0,
+            }));
             total_score += score as u64;
         }
     }
@@ -411,32 +419,53 @@ fn make_jianma_table_lsap(jianma: &Vec<(char, Character)>) -> (u64, Vec<(char, C
 
 fn write_selected_jianma<W: Write>(
     writer: W,
-    jianmas: &Vec<(char, CompactString)>,
+    jianmas: &Vec<(char, Character)>,
     predefineds: &Vec<Predefined>,
     b_area: &[char],
     space_jianma: bool,
+    sort_by_score: bool,
 ) {
     let mut writer = BufWriter::new(writer);
 
-    let mut selected_jianma = jianmas
-        .iter()
-        .map(|(zi, bianma)| {
-            let mut zi_str = CompactString::new("");
-            zi_str.push(*zi);
-            (zi_str, bianma.clone())
-        })
-        .collect::<Vec<_>>();
-    selected_jianma.extend(predefineds.iter().map(|pre| (pre.zi.clone(), pre.bianma.clone())));
+    let selected_jianma = if !sort_by_score {
+        let mut jianmas = jianmas
+            .iter()
+            .map(|(zi, ch)| {
+                let mut zi_str = CompactString::new("");
+                zi_str.push(*zi);
+                (zi_str, ch.bianma.clone())
+            })
+            .collect::<Vec<_>>();
+        jianmas.extend(predefineds.iter().map(|pre| (pre.zi.clone(), pre.bianma.clone())));
 
-    selected_jianma.sort_by(|a, b| {
-        if !a.1.ends_with(b_area) && b.1.ends_with(b_area) {
-            Ordering::Less
-        } else if a.1.ends_with(b_area) && !b.1.ends_with(b_area) {
-            Ordering::Greater
-        } else {
-            a.1.len().cmp(&b.1.len()).then(a.1.cmp(&b.1))
-        }
-    });
+        jianmas.sort_by(|a, b| {
+            if !a.1.ends_with(b_area) && b.1.ends_with(b_area) {
+                Ordering::Less
+            } else if a.1.ends_with(b_area) && !b.1.ends_with(b_area) {
+                Ordering::Greater
+            } else {
+                a.1.len().cmp(&b.1.len()).then(a.1.cmp(&b.1))
+            }
+        });
+
+        jianmas
+    } else {
+        let mut jianmas = jianmas.clone();
+        jianmas.sort_by(|a, b| {
+            a.1.weight.cmp(&b.1.weight).reverse()
+        });
+
+        let jianmas = jianmas.into_iter()
+            .map(|(zi, ch)| {
+                let mut zi_str = CompactString::new("");
+                zi_str.push(zi);
+                (zi_str, ch.bianma.clone())
+            })
+            .chain(predefineds.iter().map(|pre| (pre.zi.clone(), pre.bianma.clone())))
+            .collect();
+
+        jianmas
+    };
 
     for (zi, bianma) in selected_jianma.iter() {
         if !space_jianma && !bianma.ends_with(b_area) {
@@ -488,6 +517,7 @@ fn main() {
         &predefineds,
         &b_area,
         args.space_jianma,
+        args.sort_freq,
     );
 
     println!("最终简码得分：");
