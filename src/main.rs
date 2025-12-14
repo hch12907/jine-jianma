@@ -26,9 +26,14 @@ struct Args {
     allow: PathBuf,
 
     #[argh(option, default=r#"PathBuf::from("mabiao/yuming_chaifen.predefined.txt")"#)]
-    /// 预定义编码表，里头列出被特别制定的编码。
+    /// 预定义编码表，里头列出被特别制定的编码。计算简码时，这些特别编码将被视作不可用编码。
     /// 一行一个编码与汉字（用 \t 隔开），# 开头的行会被忽略。
     predefined: PathBuf,
+
+    #[argh(option, default=r#"PathBuf::from("mabiao/yuming_chaifen.additional.txt")"#)]
+    /// 预定义编码表，里头列出额外制定的编码。计算简码时，这些额外编码将仍被视作可用编码。
+    /// 一行一个编码与汉字（用 \t 隔开），# 开头的行会被忽略。
+    additional: PathBuf,
 
     #[argh(option, default=r#"PathBuf::from("output/yuming.txt")"#)]
     /// 简码表输出路径。
@@ -165,50 +170,17 @@ struct Predefined {
     zi: CompactString,
 }
 
-fn read_allow_file(path: &Path) -> Vec<CompactString> {
+fn read_file(path: &Path, name: &'static str, mut callback: impl FnMut(usize, &str)) {
     let mut content = String::new();
 
     if path.as_os_str().is_empty() {
-        return Vec::new();
+        return;
     }
 
     File::open(path)
-        .expect("无法打开可用编码表")
+        .expect(&format!("无法打开{name}"))
         .read_to_string(&mut content)
-        .expect("无法读取可用编码表");
-
-    let mut result = Vec::new();
-
-    for line in content.lines() {
-        let line = line
-            .split_once('#')
-            .map(|(prefix, _suffix)| prefix)
-            .unwrap_or(line)
-            .trim_ascii();
-
-        if line.is_empty() {
-            continue
-        }
-
-        result.push(CompactString::from_str_to_lowercase(line))
-    }
-
-    result
-}
-
-fn read_predefined_file(path: &Path) -> Vec<Predefined> {
-    let mut content = String::new();
-
-    if path.as_os_str().is_empty() {
-        return Vec::new();
-    }
-
-    File::open(path)
-        .expect("无法打开预定义编码表")
-        .read_to_string(&mut content)
-        .expect("无法读取预定义编码表");
-
-    let mut result = Vec::new();
+        .expect(&format!("无法读取{name}"));
 
     for (i, line) in content.lines().enumerate() {
         let line = line
@@ -221,14 +193,48 @@ fn read_predefined_file(path: &Path) -> Vec<Predefined> {
             continue
         }
 
+        callback(i, line);
+    }
+}
+
+fn read_allow_file(path: &Path) -> Vec<CompactString> {
+    let mut result = Vec::new();
+
+    read_file(path, "可用编码表", |_, line| {
+        result.push(CompactString::from_str_to_lowercase(line))
+    });
+
+    result
+}
+
+fn read_predefined_file(path: &Path) -> Vec<Predefined> {
+    let mut result = Vec::new();
+
+    read_file(path, "预定义编码表", |line_no, line| {
         if let Some((prefix, suffix)) = line.split_once('\t') {
             let bianma = CompactString::from_str_to_lowercase(suffix);
             let zi = CompactString::new(prefix);
             result.push(Predefined { bianma, zi });
         } else {
-            panic!("预定义编码表第{}行存在错误", i + 1);
+            panic!("预定义编码表第{}行存在错误", line_no + 1);
         }
-    }
+    });
+
+    result
+}
+
+fn read_additional_file(path: &Path) -> Vec<Predefined> {
+    let mut result = Vec::new();
+
+    read_file(path, "额外定义编码表", |line_no, line| {
+        if let Some((prefix, suffix)) = line.split_once('\t') {
+            let bianma = CompactString::from_str_to_lowercase(suffix);
+            let zi = CompactString::new(prefix);
+            result.push(Predefined { bianma, zi });
+        } else {
+            panic!("额外定义编码表第{}行存在错误", line_no + 1);
+        }
+    });
 
     result
 }
@@ -315,6 +321,11 @@ fn make_space_jianma_candidate(
         .map(|pre| pre.bianma.clone())
         .collect::<HashSet<_>>();
 
+    let suffix_jianma_len = suffix_jianma
+        .iter()
+        .map(|(zi, ch)| (*zi, ch.bianma.len()))
+        .collect::<HashMap<_, _>>();
+
     for (zi, character) in mabiao.iter() {
         if unneeded_zi.contains(zi) {
             continue
@@ -324,7 +335,13 @@ fn make_space_jianma_candidate(
             continue
         }
 
-        for i in 1..(character.bianma.len() - 1).min(4) {
+        let max_jianma_len = if let Some(x) = suffix_jianma_len.get(zi) {
+            x - 1
+        } else {
+            4
+        };
+
+        for i in 1..(character.bianma.len() - 1).min(max_jianma_len) {
             let jianma = CompactString::from(&character.bianma.as_str()[..i]);
 
             if unavailable_bianma.contains(&jianma) {
@@ -339,7 +356,7 @@ fn make_space_jianma_candidate(
                 * f64::powf(10.0, -(jianma.len().saturating_sub(2) as f64))
                 + 0.0;
 
-            if jianma_weight > 60000.0 {
+            if jianma_weight > 30000.0 {
                 result.push((*zi, Character {
                     bianma: CompactString::from(jianma),
                     weight: jianma_weight as u64,
@@ -422,6 +439,7 @@ fn write_selected_jianma<W: Write>(
     writer: W,
     jianmas: &Vec<(char, Character)>,
     predefineds: &Vec<Predefined>,
+    additionals: &Vec<Predefined>,
     b_area: &[char],
     space_jianma: bool,
     sort_by_score: bool,
@@ -438,6 +456,7 @@ fn write_selected_jianma<W: Write>(
             })
             .collect::<Vec<_>>();
         jianmas.extend(predefineds.iter().map(|pre| (pre.zi.clone(), pre.bianma.clone())));
+        jianmas.extend(additionals.iter().map(|pre| (pre.zi.clone(), pre.bianma.clone())));
 
         jianmas.sort_by(|a, b| {
             if !a.1.ends_with(b_area) && b.1.ends_with(b_area) {
@@ -463,6 +482,7 @@ fn write_selected_jianma<W: Write>(
                 (zi_str, ch.bianma.clone())
             })
             .chain(predefineds.iter().map(|pre| (pre.zi.clone(), pre.bianma.clone())))
+            .chain(additionals.iter().map(|pre| (pre.zi.clone(), pre.bianma.clone())))
             .collect();
 
         jianmas
@@ -492,6 +512,7 @@ fn main() {
 
     let alloweds = read_allow_file(&args.allow);
     let predefineds = read_predefined_file(&args.predefined);
+    let additionals = read_additional_file(&args.additional);
     let candidates = make_jianma_candidate(&mabiao, &alloweds, &predefineds);
 
     if args.print_candidates {
@@ -516,6 +537,7 @@ fn main() {
         File::create(&args.out).expect("无法创建简码表文件"),
         &selected_jianma,
         &predefineds,
+        &additionals,
         &b_area,
         args.space_jianma,
         args.sort_freq,

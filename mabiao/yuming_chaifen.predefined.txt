@@ -21,6 +21,7 @@
 弔	kgli	# 引 kglgi
 棗	smho	# 棘 smhsh
 峯	vkte	# 峰 vktjf
+讹	vwli	# 论 vwlbi
 
 # 空格简
 为什么	n 
